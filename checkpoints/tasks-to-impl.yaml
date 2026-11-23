@@ -1,0 +1,15 @@
+batch: Initial implementation
+source: csv_sqlite_mvp.md
+tasks:
+  - id: T-CSV-IO
+    description: Implement CSV parsing, serialization, newline preservation, and type inference
+    status: complete
+  - id: T-GRID
+    description: Implement tabbed grid editing, add row and column, and undo/redo
+    status: complete
+  - id: T-SQLITE
+    description: Implement SQLite Wasm synchronization and SQL result rendering
+    status: complete
+  - id: T-EXPORT
+    description: Implement CSV save, query CSV export, and result promotion
+    status: complete
