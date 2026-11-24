@@ -12,8 +12,26 @@ type TableMeta = {
   editSnapshot: string[][] | null
 }
 
+type CsvWritable = {
+  write(data: string): Promise<void>
+  close(): Promise<void>
+}
+
+type CsvFileHandle = {
+  getFile(): Promise<File>
+  createWritable(): Promise<CsvWritable>
+}
+
+type FilePickerWindow = Window & {
+  showOpenFilePicker?: (options: {
+    multiple: boolean
+    types: { description: string; accept: Record<string, string[]> }[]
+  }) => Promise<CsvFileHandle[]>
+}
+
 const tables: CsvTable[] = []
 const meta = new Map<CsvTable, TableMeta>()
+const fileHandles = new WeakMap<CsvTable, CsvFileHandle>()
 let activeTable: CsvTable | null = null
 let sqlText = 'SELECT * FROM '
 
@@ -209,13 +227,14 @@ function createNewTable() {
   renderAll()
 }
 
-async function openFiles(files: FileList | File[]) {
-  for (const file of Array.from(files)) {
+async function openFiles(files: FileList | File[], handles?: CsvFileHandle[]) {
+  for (const [index, file] of Array.from(files).entries()) {
     if (!file.name.toLowerCase().endsWith('.csv')) continue
     const text = await file.text()
     try {
       const parsed = parseCsv(text)
       const table: CsvTable = { name: file.name, ...parsed, dirty: false }
+      if (handles?.[index]) fileHandles.set(table, handles[index])
       tables.push(table)
       activeTable = table
     } catch (error) {
@@ -226,18 +245,51 @@ async function openFiles(files: FileList | File[]) {
   renderAll()
 }
 
-function saveActive() {
-  if (!activeTable) return
-  const csv = serializeCsv(activeTable.headers, activeTable.rows, activeTable.newline)
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = activeTable.name
-  anchor.click()
-  URL.revokeObjectURL(url)
-  activeTable.dirty = false
-  renderTabs()
+async function openCsvFiles() {
+  const pickerWindow = window as FilePickerWindow
+  if (!pickerWindow.showOpenFilePicker) {
+    fileInput.click()
+    return
+  }
+  try {
+    const handles = await pickerWindow.showOpenFilePicker({
+      multiple: true,
+      types: [{ description: 'CSV files', accept: { 'text/csv': ['.csv'] } }],
+    })
+    const files = await Promise.all(handles.map((handle) => handle.getFile()))
+    await openFiles(files, handles)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    setStatus(`読み込みエラー: ${error instanceof Error ? error.message : String(error)}`, true)
+  }
+}
+
+async function saveActive() {
+  const table = activeTable
+  if (!table) return
+  const csv = serializeCsv(table.headers, table.rows, table.newline)
+  try {
+    const handle = fileHandles.get(table)
+    if (handle) {
+      const writable = await handle.createWritable()
+      await writable.write(csv)
+      await writable.close()
+      setStatus(`${table.name} に上書き保存しました`)
+    } else {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = table.name
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setStatus('CSVをダウンロードしました')
+    }
+    table.dirty = false
+    renderTabs()
+  } catch (error) {
+    setStatus(`保存エラー: ${error instanceof Error ? error.message : String(error)}`, true)
+  }
 }
 
 function setStatus(message: string, error = false) {
@@ -281,9 +333,10 @@ function renderResult(result: { columns: string[]; values: unknown[][] }) {
 }
 
 document.querySelector('#newButton')!.addEventListener('click', createNewTable)
-document.querySelector('#openButton')!.addEventListener('click', () => fileInput.click())
+document.querySelector('#openButton')!.addEventListener('click', () => void openCsvFiles())
 fileInput.addEventListener('change', () => {
   if (fileInput.files) void openFiles(fileInput.files)
+  fileInput.value = ''
 })
 document.querySelector('#saveButton')!.addEventListener('click', saveActive)
 document.querySelector('#runButton')!.addEventListener('click', () => void runQuery())
